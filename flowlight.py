@@ -188,7 +188,7 @@ class Trigger:
 
 
 class _Task:
-    def __init__(self, func, run_after=None):
+    def __init__(self, func, run_after=None, run_only=None):
         self.func = func
         self.meta = _TaskMeta(self)
         self.trigger = Trigger()
@@ -199,13 +199,16 @@ class _Task:
 
         self.event = threading.Event()
         self.run_after = run_after
+        self.run_only = run_only
         
         if run_after is not None and isinstance(run_after, _Task):
             run_after.trigger.add(Signal(lambda: self.event.set()))
 
+
     def __call__(self, *args, **kwargs):
-        run_after = self.run_after
-        if run_after is not None and isinstance(run_after, _Task):
+        if self.run_only is not None and self.run_only() is False:
+            return (Exception('Run condition check is failed.'), False)
+        if self.run_after is not None and isinstance(self.run_after, _Task):
             self.event.wait()
             self.event.clear()
         try:
@@ -219,9 +222,6 @@ class _Task:
         finally:
             for signal in self.trigger:
                 signal.send()
-
-    def subscribe(self, channel):
-        pass
 
     def start(self, *args):
         self.meta.started_at = time()
@@ -359,7 +359,7 @@ class Connection:
 
     def build_connect(self):
         if self.host == '127.0.0.1':
-            setattr(self, 'exec_remote_command', self.exec_local_command)
+            setattr(self, '_exec_command', self.exec_local_command)
         else:
             self.client.connect(self.host, self.port, self.username, self.password, 
                 pkey=self.pkey, timeout=self.timeout, **self._connect_args)
@@ -389,10 +389,11 @@ class Connection:
     def exec_command(self, command):
         if not self.is_connected:
             self.build_connect()
-        return self.exec_remote_command(command)
+        return self._exec_command(command)
 
-    def __del__(self):
-        self.close()
+    _exec_command = exec_remote_command
+
+    __del__ = close
 
 
 class API:
@@ -400,7 +401,3 @@ class API:
         pass
 
 
-if __name__ == '__main__':
-    cluster = Cluster(['172.22.31.114', Group(['172.22.31.117', '172.22.31.124'])])
-    cluster.set_connection(pkey='~/.ssh/id_rsa')
-    

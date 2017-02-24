@@ -57,6 +57,16 @@ def show_file(meta, cluster):
 cluster.run_task(show_file)
 ```
 
+Use `run_only` for task running pre-check.
+
+```python
+@task(run_only=lambda: 1 > 2)
+def fail_task(self):
+    print('condition is passed')
+
+err, status = cluster.run_task(fail_task)
+```
+
 Use trigger in multi-threading.
 
 ```python
