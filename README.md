@@ -13,22 +13,22 @@ cluster = Cluster(['host1', Group(['host2', 'host3'])])
 cluster.set_connection(password='password')
 
 @task
-def create_file(meta, cluster):
+def create_file(task, cluster):
     responses = cluster.run('''
     echo {value} > /tmp/test;
-        '''.format(value=meta.value)
+        '''.format(value=task.value)
     )
-    meta.value += 1
+    task.value += 1
 
-@create_file.on('start')
-def before_create_file(meta):
-    meta.value = 1
+@create_file.on_start
+def before_create_file(task):
+    task.value = 1
 
-@create_file.on('complete')
-def after_create_file(meta):
-    print(meta.value)
+@create_file.on_complete
+def after_create_file(task):
+    print(task.value)
 
-@create_file.on('error')
+@create_file.on_error
 def error_when_create_file(exception):
     print(exception)
     import traceback
@@ -92,4 +92,22 @@ sleep a while...
 1
 
 1
+```
+
+Async tasks supported.
+
+```python
+async def async_task(machine):
+    await machine.run_async("ls")
+
+m = Machine('host1')
+m.set_connection()
+m2 = Machine('host2')
+m2.set_connection()
+
+ev_loop = asyncio.get_event_loop()
+ev_loop.run_until_complete(asyncio.gather(
+    async_task(m), async_task(m2)
+))
+ev_loop.close()
 ```

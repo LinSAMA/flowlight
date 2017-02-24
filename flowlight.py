@@ -1,4 +1,5 @@
 #-*- coding:utf-8 -*-
+import asyncio
 import os
 import paramiko
 import subprocess
@@ -68,6 +69,13 @@ class Machine(Node):
     def run(self, cmd, **kwargs):
         command = Command(cmd)
         response = self._connection.exec_command(command, **kwargs)
+        return response
+
+    @Util._need_connection
+    def run_async(self, cmd, **kwargs):
+        command = Command(cmd)
+        response = yield from self._connection.exec_async_command(command, **kwargs)
+        print(response)
         return response
 
     def run_task(self, task, *args, **kwargs):
@@ -256,12 +264,13 @@ def task(func=None, *args, **kwargs):
         True
 
     """
+    cls = _Task
     if func is None:
         class _Deffered:
-            def __new__(cls, func):
-                return _Task(func, *args, **kwargs)
+            def __new__(_cls, func):
+                return cls(func, *args, **kwargs)
         return _Deffered
-    return _Task(func, *args, **kwargs)
+    return cls(func, *args, **kwargs)
 
 
 class _TaskMeta(dict):
@@ -391,6 +400,50 @@ class Connection:
             self.build_connect()
         return self._exec_command(command)
 
+    @asyncio.coroutine
+    def exec_async_command(self, command):
+        def _read(chan):
+            future = asyncio.Future()
+            loop = asyncio.get_event_loop()
+
+            def on_read():
+                chunk = chan.recv(1024)
+                future.set_result(chunk)
+            
+            loop.add_reader(chan.fileno(), on_read)
+            
+            chunk = yield from future
+            loop.remove_reader(chan.fileno())
+            return chunk
+
+        def _read_all(chan):
+            response = []
+            chunk = yield from _read(chan)
+            while chunk:
+                response.append(chunk)
+                chunk = yield from _read(chan)
+            return b''.join(response)
+            
+        if not self.is_connected:
+            self.build_connect()
+        chan = self.client.get_transport().open_session()
+        chan.exec_command(command.cmd)
+        
+        data = yield from _read_all(chan)
+
+        from io import BytesIO as bio
+        response = Response(self._machine, bio(b''), bio(data), bio(b''))
+        print(command.cmd)
+        return response
+
+    def __enter__(self):
+        if not self.is_connected:
+            self.build_connect()
+        return self.client
+
+    def __exit__(self, type, value, traceback):
+        pass
+
     _exec_command = exec_remote_command
 
     __del__ = close
@@ -399,5 +452,4 @@ class Connection:
 class API:
     def serve(self):
         pass
-
 
