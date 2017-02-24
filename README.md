@@ -37,6 +37,8 @@ def error_when_create_file(exception):
 cluster.run_task(create_file)
 ```
 
+output:
+
 ```
 2
 ```
@@ -69,6 +71,8 @@ before.start()
 before.join()
 after.join()
 ```
+
+output:
 
 ```
 sleep a while...

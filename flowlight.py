@@ -1,15 +1,27 @@
 #-*- coding:utf-8 -*-
+import os
 import paramiko
+import subprocess
 import threading
 from contextlib import contextmanager
 from time import time
 
-def _need_connection(func):
-    def wrapper(self, *args, **kwargs):
-        if not self._connection:
-            raise Exception('Connection is not set')
-        return func(self, *args, **kwargs)
-    return wrapper
+__all__ = [
+    'task',
+    'Machine',
+    'Group',
+    'Cluster',
+    'API'
+]
+
+
+class Util:
+    def _need_connection(func):
+        def wrapper(self, *args, **kwargs):
+            if not self._connection:
+                raise Exception('Connection is not set')
+            return func(self, *args, **kwargs)
+        return wrapper
 
 
 class Node:
@@ -37,12 +49,22 @@ class Node:
 
 
 class Machine(Node):
+    """remote Machine.
+
+    Usage::
+
+        >>> m = Machine('127.0.0.1')
+        >>> m.name = 'remote'
+        >>> m.set_connection(password='root')
+        >>> isinstance(m.run('echo 1;'), Response)
+        True
+    """
     def __init__(self, host, name=None):
         Node.__init__(self, name)
         self.host = host
         self._connection = None
 
-    @_need_connection
+    @Util._need_connection
     def run(self, cmd, **kwargs):
         command = Command(cmd)
         response = self._connection.exec_command(command, **kwargs)
@@ -53,9 +75,17 @@ class Machine(Node):
             raise Exception('Need a task')
         return task(self, *args, **kwargs)
 
-    def set_connection(self, port=22, username='root', password=None, timeout=5, auto_add_host_policy=True, lazy=True):
+    def set_connection(self, port=22, username='root', password=None, timeout=5, **kwargs):
         if self._connection:
-            self._connection = Connection.__init__(self._connection, self.host, port, username, password, timeout, auto_add_host_policy)
+            self._connection = Connection.__init__(
+                machine=self._connection, 
+                host=self.host,
+                port=port,
+                username=username,
+                password=password,
+                timeout=timeout,
+                **kwargs
+            )
         else:
             self._connection = Connection(
                 machine=self,
@@ -64,8 +94,7 @@ class Machine(Node):
                 username=username,
                 password=password, 
                 timeout=timeout, 
-                auto_add_host_policy=auto_add_host_policy,
-                lazy=lazy
+                **kwargs
             )
 
     def get_connection(self):
@@ -80,9 +109,9 @@ class Group(Node):
         for node in nodes:
             self.add(node)
 
-    def set_connection(self, port=22, username='root', password=None, timeout=5, auto_add_host_policy=True, lazy=True):
+    def set_connection(self, port=22, username='root', password=None, timeout=5, **kwargs):
         for node in self.nodes():
-            node.set_connection(port, username, password, timeout, auto_add_host_policy, lazy)
+            node.set_connection(port, username, password, timeout, **kwargs)
 
     def add(self, node):
         if not isinstance(node, Node):
@@ -123,8 +152,10 @@ class Cluster(Group):
 
 
 class Command:
-    def __init__(self, cmd):
+    def __init__(self, cmd, bufsize=-1, timeout=5):
         self.cmd = cmd
+        self.bufsize = bufsize
+        self.timeout = timeout
 
 
 class Signal:
@@ -144,6 +175,7 @@ class Signal:
     def __call__(self, func):
         self.connect(func)
 
+
 class Trigger:
     def __init__(self):
         self.signals = []
@@ -153,6 +185,7 @@ class Trigger:
 
     def __iter__(self):
         return iter(self.signals)
+
 
 class _Task:
     def __init__(self, func, run_after=None):
@@ -187,12 +220,8 @@ class _Task:
             for signal in self.trigger:
                 signal.send()
 
-    def on(self, signal, *args, **kwargs):
-        assert signal in ('start', 'complete', 'error')
-        def _wrapper(func):
-            assert callable(func)
-            self.trigger.add(Signal(func=func, name=signal))
-        return _wrapper
+    def subscribe(self, channel):
+        pass
 
     def start(self, *args):
         self.meta.started_at = time()
@@ -206,15 +235,57 @@ class _Task:
 
 
 def task(func=None, *args, **kwargs):
+    """Decorator function on task procedure which will be executed by machine cluster.
+
+    :param func: the function to be decorated, act like a task.
+            if no function specified, this will return a temporary class,
+            which will instantiate a `_Task` object when it was called.
+            otherwise, this will return a standard `_Task` object with
+            parameters passed in.
+
+    Usage::
+
+        >>> deferred = task()
+        >>> isinstance(deferred, _Task)
+        False
+        >>> t = deferred(lambda: None)
+        >>> isinstance(t, _Task)
+        True
+        >>> t2 = task(lambda: None)
+        >>> isinstance(t2, _Task)
+        True
+
+    """
     if func is None:
-        class _:
+        class _Deffered:
             def __new__(cls, func):
                 return _Task(func, *args, **kwargs)
-        return _
+        return _Deffered
     return _Task(func, *args, **kwargs)
 
 
 class _TaskMeta(dict):
+    """A dict-like storage data structure to collect task's information.
+
+    :param task: the task that owns this meta object.
+
+    Usage::
+
+        >>> t = _Task(lambda: None)
+        >>> isinstance(t.meta, _TaskMeta)
+        True
+        >>> isinstance(t.meta, dict)
+        True
+        >>> 'task' in t.meta
+        True
+        >>> t.meta['a'] = 1
+        >>> print(t.meta['a'])
+        1
+        >>> t.meta.b = 2
+        >>> print(t.meta['b'])
+        2
+
+    """
     def __init__(self, task, **kwargs):
         self.task = task
 
@@ -225,16 +296,22 @@ class _TaskMeta(dict):
         self[name] = value
 
 
-class Stage:
-    def __init__(self, name, tasks):
-        self.name = name
-        self.tasks = tasks
-
-    def add_task(self, task):
-        self.tasks.append(task)
-
-
 class Response:
+    """A wrapper of executed commands' result.
+
+    :param target: the machine that runs the commands.
+    :param stdin: standard input.
+    :param stdout: standard output.
+    :param stderr: standard error.
+
+    Usage::
+
+        >>> from io import BytesIO as bio
+        >>> r = Response(Machine('127.0.0.1'), bio(b'stdin'), bio(b'stdout'), bio(b'stderr'))
+        >>> print(r)
+        stdout
+
+    """
     def __init__(self, target, stdin, stdout, stderr):
         self.target = target
         self.stdin = stdin
@@ -247,33 +324,75 @@ class Response:
 
 
 class Connection:
-    def __init__(self, machine, host, port=22, username='root', password=None, timeout=5, auto_add_host_policy=True, lazy=True):
+    """A SSH Channel connection to remote machines.
+
+    :param machine: the `Machine` owns this connection.
+    :param host: the remote host string.
+    :param port: the remote port.
+    :param username: loggin user's name.
+    :param password: loggin user's password.
+    :param pkey: private key to use for authentication.
+    :param timeout: timeout seconds for the connection.
+    :param auto_add_host_policy: auto add host key when no keys were found.
+    :param lazy: whether to build the connection when initializing.
+
+    """
+    def __init__(self, machine, host, port=22, username='root', 
+            password=None, pkey='~/.ssh/id_rsa', timeout=5, auto_add_host_policy=True, lazy=True, **kwargs):
         self._machine = machine
         self.client = paramiko.SSHClient()
+        self.client.load_system_host_keys()
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.timeout = timeout
+        self.pkey = paramiko.RSAKey.from_private_key_file(
+            os.path.abspath(os.path.expanduser(pkey))
+        )
+        self._connect_args = kwargs
         self.is_connected = False
         if auto_add_host_policy:
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         if not lazy:
-            self.build_connect(host, port, username, password, timeout)
+            self.build_connect()
 
-    def build_connect(self, host, port, username, password, timeout):
-        self.client.connect(host, port, username, password, timeout=timeout)
+    def build_connect(self):
+        if self.host == '127.0.0.1':
+            setattr(self, 'exec_remote_command', self.exec_local_command)
+        else:
+            self.client.connect(self.host, self.port, self.username, self.password, 
+                pkey=self.pkey, timeout=self.timeout, **self._connect_args)
         self.is_connected = True
+
+    def close(self):
+        self.client.close()
+        self.is_connected = False
+
+    def exec_local_command(self, command):
+        p = subprocess.Popen(command.cmd, shell=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT,
+            bufsize=command.bufsize
+        )
+        response = Response(self._machine, p.stdin, p.stdout, p.stderr)
+        return response
+
+    def exec_remote_command(self, command):
+        response = Response(self._machine, *self.client.exec_command(
+            command.cmd,
+            bufsize=command.bufsize,
+            timeout=command.timeout
+        ))
+        return response
     
     def exec_command(self, command):
         if not self.is_connected:
-            self.build_connect(self.host, self.port, self.username, self.password, self.timeout)
-        response = Response(self._machine, *self.client.exec_command(command.cmd))
-        return response
+            self.build_connect()
+        return self.exec_remote_command(command)
 
-
-class Util:
-    pass
+    def __del__(self):
+        self.close()
 
 
 class API:
@@ -281,3 +400,7 @@ class API:
         pass
 
 
+if __name__ == '__main__':
+    cluster = Cluster(['172.22.31.114', Group(['172.22.31.117', '172.22.31.124'])])
+    cluster.set_connection(pkey='~/.ssh/id_rsa')
+    
