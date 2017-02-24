@@ -1,5 +1,6 @@
-#-*- coding:utf-8 -*0
+#-*- coding:utf-8 -*-
 import paramiko
+import threading
 from contextlib import contextmanager
 from time import time
 
@@ -126,33 +127,71 @@ class Command:
         self.cmd = cmd
 
 
+class Signal:
+    def __init__(self, func=None, name='DEFAULT'):
+        self.name = name
+        self._receivers = []
+        if func is not None:
+            self.connect(func)
+
+    def connect(self, func):
+        self._receivers.append(func)
+
+    def send(self, *args, **kwargs):
+        for receiver in self._receivers:
+            receiver(*args, **kwargs)
+
+    def __call__(self, func):
+        self.connect(func)
+
+class Trigger:
+    def __init__(self):
+        self.signals = []
+
+    def add(self, signal):
+        self.signals.append(signal)
+
+    def __iter__(self):
+        return iter(self.signals)
+
 class _Task:
     def __init__(self, func, run_after=None):
         self.func = func
         self.meta = _TaskMeta(self)
-        self.is_finished = False
+        self.trigger = Trigger()
+
+        self.on_start = Signal(self.start)
+        self.on_complete = Signal(self.complete)
+        self.on_error = Signal(self.error)
+
+        self.event = threading.Event()
         self.run_after = run_after
+        
+        if run_after is not None and isinstance(run_after, _Task):
+            run_after.trigger.add(Signal(lambda: self.event.set()))
 
     def __call__(self, *args, **kwargs):
         run_after = self.run_after
         if run_after is not None and isinstance(run_after, _Task):
-            if not run_after.is_finished:
-                return (Exception('{task} is not finished'.format(task=repr(run_after))), False)
+            self.event.wait()
+            self.event.clear()
         try:
-            self.start(self.meta)
+            self.on_start.send(self.meta)
             result = self.func(self.meta, *args, **kwargs)
-            self.complete(self.meta)
-            self.is_finished = True
+            self.on_complete.send(self.meta)
             return (result, True)
         except Exception as e:
-            self.error(e)
+            self.on_error.send(e)
             return (e, False)
+        finally:
+            for signal in self.trigger:
+                signal.send()
 
     def on(self, signal, *args, **kwargs):
         assert signal in ('start', 'complete', 'error')
         def _wrapper(func):
             assert callable(func)
-            setattr(self, signal, func)
+            self.trigger.add(Signal(func=func, name=signal))
         return _wrapper
 
     def start(self, *args):
@@ -241,4 +280,4 @@ class API:
     def serve(self):
         pass
 
-    
+

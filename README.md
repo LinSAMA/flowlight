@@ -4,41 +4,78 @@ a tool make remote operations easier
 
 # Example
 
+Run task via ssh on remote machines.
+
 ```python
-    cluster = Cluster(['host1', Group(['host2', 'host3'])])
-    cluster.set_connection(password='password')
+from flowlight import Cluster, Group, task
 
-    @task
-    def create_file(meta, cluster):
-        responses = cluster.run('''
-        echo {value} > /tmp/test;
-            '''.format(value=meta.value)
-        )
-        meta.value += 1
+cluster = Cluster(['host1', Group(['host2', 'host3'])])
+cluster.set_connection(password='password')
 
-    @create_file.on('start')
-    def before_create_file(meta):
-        meta.value = 1
+@task
+def create_file(meta, cluster):
+    responses = cluster.run('''
+    echo {value} > /tmp/test;
+        '''.format(value=meta.value)
+    )
+    meta.value += 1
 
-    @create_file.on('complete')
-    def after_create_file(meta):
-        print(meta.value)
+@create_file.on('start')
+def before_create_file(meta):
+    meta.value = 1
 
-    @create_file.on('error')
-    def error_when_create_file(exception):
-        print(exception)
-        import traceback
-        traceback.print_exc()
+@create_file.on('complete')
+def after_create_file(meta):
+    print(meta.value)
 
-    cluster.run_task(create_file)
+@create_file.on('error')
+def error_when_create_file(exception):
+    print(exception)
+    import traceback
+    traceback.print_exc()
 
-    @task(run_after=create_file)
-    def show_file(meta, cluster):
-        responses = cluster.run('''
-            cat /tmp/test;            
-        ''')
-        for res in responses:
-            print(res)
+cluster.run_task(create_file)
+```
 
-    cluster.run_task(show_file)
+```
+2
+```
+
+Scheduling tasks with order.
+
+```python
+@task(run_after=create_file)
+def show_file(meta, cluster):
+    responses = cluster.run('''
+        cat /tmp/test;            
+    ''')
+    for res in responses:
+        print(res)
+
+cluster.run_task(show_file)
+```
+
+Use trigger in multi-threading.
+
+```python
+import threading
+from time import sleep
+after = threading.Thread(target=lambda: cluster.run_task(show_file))
+before = threading.Thread(target=lambda: cluster.run_task(create_file))
+after.start()
+print('sleep a while...')
+sleep(2)
+before.start()
+before.join()
+after.join()
+```
+
+```
+sleep a while...
+2
+1
+
+1
+
+1
 ```
