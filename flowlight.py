@@ -6,6 +6,7 @@ import subprocess
 import threading
 from contextlib import contextmanager
 from time import time
+from io import BytesIO
 
 __all__ = [
     'task',
@@ -17,7 +18,7 @@ __all__ = [
 
 
 class Util:
-    def _need_connection(func):
+    def need_connection(func):
         def wrapper(self, *args, **kwargs):
             if not self._connection:
                 raise Exception('Connection is not set')
@@ -65,17 +66,16 @@ class Machine(Node):
         self.host = host
         self._connection = None
 
-    @Util._need_connection
+    @Util.need_connection
     def run(self, cmd, **kwargs):
-        command = Command(cmd)
-        response = self._connection.exec_command(command, **kwargs)
+        command = Command(cmd, **kwargs)
+        response = self._connection.exec_command(command)
         return response
 
-    @Util._need_connection
+    @Util.need_connection
     def run_async(self, cmd, **kwargs):
-        command = Command(cmd)
-        response = yield from self._connection.exec_async_command(command, **kwargs)
-        print(response)
+        command = Command(cmd, **kwargs)
+        response = yield from self._connection.exec_async_command(command)
         return response
 
     def run_task(self, task, *args, **kwargs):
@@ -83,27 +83,11 @@ class Machine(Node):
             raise Exception('Need a task')
         return task(self, *args, **kwargs)
 
-    def set_connection(self, port=22, username='root', password=None, timeout=5, **kwargs):
+    def set_connection(self, **kwargs):
         if self._connection:
-            self._connection = Connection.__init__(
-                machine=self._connection, 
-                host=self.host,
-                port=port,
-                username=username,
-                password=password,
-                timeout=timeout,
-                **kwargs
-            )
+            self._connection = Connection.__init__(machine=self, host=self.host, **kwargs)
         else:
-            self._connection = Connection(
-                machine=self,
-                host=self.host, 
-                port=port, 
-                username=username,
-                password=password, 
-                timeout=timeout, 
-                **kwargs
-            )
+            self._connection = Connection(machine=self, host=self.host, **kwargs)
 
     def get_connection(self):
         return self._connection
@@ -117,9 +101,9 @@ class Group(Node):
         for node in nodes:
             self.add(node)
 
-    def set_connection(self, port=22, username='root', password=None, timeout=5, **kwargs):
+    def set_connection(self, **kwargs):
         for node in self.nodes():
-            node.set_connection(port, username, password, timeout, **kwargs)
+            node.set_connection(**kwargs)
 
     def add(self, node):
         if not isinstance(node, Node):
@@ -167,11 +151,9 @@ class Command:
 
 
 class Signal:
-    def __init__(self, func=None, name='DEFAULT'):
+    def __init__(self, name=None):
         self.name = name
         self._receivers = []
-        if func is not None:
-            self.connect(func)
 
     def connect(self, func):
         self._receivers.append(func)
@@ -182,6 +164,12 @@ class Signal:
 
     def __call__(self, func):
         self.connect(func)
+
+    @classmethod
+    def func_signal(cls, func):
+        signal = cls(None)
+        signal.connect(func)
+        return signal
 
 
 class Trigger:
@@ -196,27 +184,31 @@ class Trigger:
 
 
 class _Task:
+    """ A task wrapper on funciton.
+
+    :param func: 
+    :param run_after: the task
+    """
     def __init__(self, func, run_after=None, run_only=None):
         self.func = func
         self.meta = _TaskMeta(self)
         self.trigger = Trigger()
 
-        self.on_start = Signal(self.start)
-        self.on_complete = Signal(self.complete)
-        self.on_error = Signal(self.error)
+        self.on_start = Signal.func_signal(self.start)
+        self.on_complete = Signal.func_signal(self.complete)
+        self.on_error = Signal.func_signal(self.error)
 
         self.event = threading.Event()
-        self.run_after = run_after
+        self.meta.run_after = run_after
         self.run_only = run_only
         
         if run_after is not None and isinstance(run_after, _Task):
-            run_after.trigger.add(Signal(lambda: self.event.set()))
-
+            run_after.trigger.add(Signal.func_signal(lambda: self.event.set()))
 
     def __call__(self, *args, **kwargs):
         if self.run_only is not None and self.run_only() is False:
             return (Exception('Run condition check is failed.'), False)
-        if self.run_after is not None and isinstance(self.run_after, _Task):
+        if self.meta.run_after is not None and isinstance(self.meta.run_after, _Task):
             self.event.wait()
             self.event.clear()
         try:
@@ -243,7 +235,7 @@ class _Task:
 
 
 def task(func=None, *args, **kwargs):
-    """Decorator function on task procedure which will be executed by machine cluster.
+    """Decorator function on task procedure which will be executed on machine cluster.
 
     :param func: the function to be decorated, act like a task.
             if no function specified, this will return a temporary class,
@@ -346,8 +338,8 @@ class Connection:
     :param lazy: whether to build the connection when initializing.
 
     """
-    def __init__(self, machine, host, port=22, username='root', 
-            password=None, pkey='~/.ssh/id_rsa', timeout=5, auto_add_host_policy=True, lazy=True, **kwargs):
+    def __init__(self, machine, host='127.0.0.1', port=22, username='root', 
+            password=None, pkey='~/.ssh/id_rsa', timeout=5, auto_add_host_policy=True, connect=False, **kwargs):
         self._machine = machine
         self.client = paramiko.SSHClient()
         self.client.load_system_host_keys()
@@ -363,7 +355,7 @@ class Connection:
         self.is_connected = False
         if auto_add_host_policy:
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        if not lazy:
+        if connect:
             self.build_connect()
 
     def build_connect(self):
@@ -395,12 +387,19 @@ class Connection:
         ))
         return response
     
+    def ensure_connect(func):
+        def wrapper(self, *args, **kwargs):
+            if not self.is_connected:
+                self.build_connect()
+            return func(self, *args, **kwargs)
+        return wrapper
+    
+    @ensure_connect
     def exec_command(self, command):
-        if not self.is_connected:
-            self.build_connect()
         return self._exec_command(command)
 
     @asyncio.coroutine
+    @ensure_connect
     def exec_async_command(self, command):
         def _read(chan):
             future = asyncio.Future()
@@ -417,28 +416,23 @@ class Connection:
             return chunk
 
         def _read_all(chan):
-            response = []
+            chunks = []
             chunk = yield from _read(chan)
             while chunk:
-                response.append(chunk)
+                chunks.append(chunk)
                 chunk = yield from _read(chan)
-            return b''.join(response)
+            return b''.join(chunks)
             
-        if not self.is_connected:
-            self.build_connect()
         chan = self.client.get_transport().open_session()
         chan.exec_command(command.cmd)
         
         data = yield from _read_all(chan)
 
-        from io import BytesIO as bio
-        response = Response(self._machine, bio(b''), bio(data), bio(b''))
-        print(command.cmd)
+        response = Response(self._machine, BytesIO(b''), BytesIO(data), BytesIO(b''))
         return response
 
+    @ensure_connect
     def __enter__(self):
-        if not self.is_connected:
-            self.build_connect()
         return self.client
 
     def __exit__(self, type, value, traceback):
