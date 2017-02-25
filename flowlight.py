@@ -347,7 +347,7 @@ class Connection:
         self._machine = machine
         self.client = paramiko.SSHClient()
         self.client.load_system_host_keys()
-        self.host = host
+        self.host = socket.gethostbyname(host)
         self.port = port
         self.username = username
         self.password = password
@@ -481,11 +481,13 @@ class API:
             except:
                 self.send_response(400)
                 self.end_headers()
-                self.copyfile(BytesIO(bytes(self.__doc__)), self.wfile)
+                self.copyfile(BytesIO(bytes(cls.__doc__, 'utf-8')), self.wfile)
         Handler.do_GET = do_GET
         server = Server(('0.0.0.0', cls.PORT), Handler)
         print('FlowLight API serve on {port}... \n {usage}'.format(port=cls.PORT, usage=cls.__doc__))
         server.serve_forever()
+
+api_serve = API.serve
 
 
 if __name__ == '__main__':

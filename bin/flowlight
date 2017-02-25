@@ -1,0 +1,7 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from flowlight import api_serve
+
+if __name__ == '__main__':
+    api_serve()

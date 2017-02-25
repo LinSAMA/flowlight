@@ -130,14 +130,14 @@ output:
 ```
 
 ```
-
-```
-http -f GET "http://127.0.0.1:3600/127.0.0.1/ps aux|wc -l"
+http -f GET "http://127.0.0.1:3600/host1,host2/ps aux|wc -l"
 ```
 
 output:
 
 ```html
-<h1>127.0.0.1</h1><pre>     280
+<h1>host1</h1><pre>     122
+</pre>
+<h1>host2</h1><pre>     118
 </pre>
 ```
