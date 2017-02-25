@@ -2,7 +2,7 @@
 
 a tool make remote operations easier
 
-# Example
+## Usage
 
 Run task via ssh on remote machines.
 
@@ -110,4 +110,34 @@ ev_loop.run_until_complete(asyncio.gather(
     async_task(m), async_task(m2)
 ))
 ev_loop.close()
+```
+
+Simple HTTP API command runner.
+
+```python
+API.serve()
+```
+
+```
+http -f GET "http://127.0.0.1:3600/127.0.0.1/whoami"
+```
+
+output:
+
+```html
+<h1>127.0.0.1</h1><pre>tonnie
+</pre>
+```
+
+```
+
+```
+http -f GET "http://127.0.0.1:3600/127.0.0.1/ps aux|wc -l"
+```
+
+output:
+
+```html
+<h1>127.0.0.1</h1><pre>     280
+</pre>
 ```

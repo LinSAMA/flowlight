@@ -2,11 +2,12 @@
 import asyncio
 import os
 import paramiko
+import socket
 import subprocess
 import threading
 from contextlib import contextmanager
 from time import time
-from io import BytesIO
+from io import BytesIO, StringIO
 
 __all__ = [
     'task',
@@ -15,15 +16,6 @@ __all__ = [
     'Cluster',
     'API'
 ]
-
-
-class Util:
-    def need_connection(func):
-        def wrapper(self, *args, **kwargs):
-            if not self._connection:
-                raise Exception('Connection is not set')
-            return func(self, *args, **kwargs)
-        return wrapper
 
 
 class Node:
@@ -56,7 +48,7 @@ class Machine(Node):
     Usage::
 
         >>> m = Machine('127.0.0.1')
-        >>> m.name = 'remote'
+        >>> m.name = 'local'
         >>> m.set_connection(password='root')
         >>> isinstance(m.run('echo 1;'), Response)
         True
@@ -66,13 +58,20 @@ class Machine(Node):
         self.host = host
         self._connection = None
 
-    @Util.need_connection
+    def _need_connection(func):
+        def wrapper(self, *args, **kwargs):
+            if not self._connection:
+                raise Exception('Connection is not set')
+            return func(self, *args, **kwargs)
+        return wrapper
+
+    @_need_connection
     def run(self, cmd, **kwargs):
         command = Command(cmd, **kwargs)
         response = self._connection.exec_command(command)
         return response
 
-    @Util.need_connection
+    @_need_connection
     def run_async(self, cmd, **kwargs):
         command = Command(cmd, **kwargs)
         response = yield from self._connection.exec_async_command(command)
@@ -92,8 +91,12 @@ class Machine(Node):
     def get_connection(self):
         return self._connection
 
+    __str__ = lambda self: self.host
+
 
 class Group(Node):
+    """ A group of multiple `Machine` and `Group`.
+    """
     def __init__(self, nodes, name=None):
         Node.__init__(self, name)
         self._nodes = []
@@ -131,7 +134,6 @@ class Group(Node):
             responses.extend(res)
         return responses
 
-
     def run_task(self, task, *args, **kwargs):
         if not isinstance(task, _Task):
             raise Exception('Need a task')
@@ -141,18 +143,19 @@ class Group(Node):
 class Cluster(Group):
     def __init__(self, nodes, name=None):
         Group.__init__(self, nodes, name)
-
+    
 
 class Command:
-    def __init__(self, cmd, bufsize=-1, timeout=5):
+    def __init__(self, cmd, bufsize=-1, timeout=5, env=None):
         self.cmd = cmd
         self.bufsize = bufsize
         self.timeout = timeout
+        self.env = None
 
 
 class Signal:
-    def __init__(self, name=None):
-        self.name = name
+    def __init__(self, doc=None):
+        self.doc = doc
         self._receivers = []
 
     def connect(self, func):
@@ -186,8 +189,9 @@ class Trigger:
 class _Task:
     """ A task wrapper on funciton.
 
-    :param func: 
-    :param run_after: the task
+    :param func: task function called by `Node` lately.
+    :param run_after: run the task when `run_after` is finish stage.
+    :param run_only: only run the task when `run_only` condition is True.
     """
     def __init__(self, func, run_after=None, run_only=None):
         self.func = func
@@ -318,10 +322,10 @@ class Response:
         self.stdin = stdin
         self.stdout = stdout
         self.stderr = stderr
-        self.result = self.stdout.read().decode()
+        self.result = self.stdout.read()
 
     def __str__(self):
-        return self.result
+        return self.result.decode()
 
 
 class Connection:
@@ -359,7 +363,7 @@ class Connection:
             self.build_connect()
 
     def build_connect(self):
-        if self.host == '127.0.0.1':
+        if socket.gethostbyname(self.host) == '127.0.0.1':
             setattr(self, '_exec_command', self.exec_local_command)
         else:
             self.client.connect(self.host, self.port, self.username, self.password, 
@@ -374,7 +378,8 @@ class Connection:
         p = subprocess.Popen(command.cmd, shell=True, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.STDOUT,
-            bufsize=command.bufsize
+            bufsize=command.bufsize,
+            env=command.env
         )
         response = Response(self._machine, p.stdin, p.stdout, p.stderr)
         return response
@@ -383,7 +388,8 @@ class Connection:
         response = Response(self._machine, *self.client.exec_command(
             command.cmd,
             bufsize=command.bufsize,
-            timeout=command.timeout
+            timeout=command.timeout,
+            environment=command.env
         ))
         return response
     
@@ -402,11 +408,12 @@ class Connection:
     @ensure_connect
     def exec_async_command(self, command):
         def _read(chan):
+            CHUNK_SIZE = 1024
             future = asyncio.Future()
             loop = asyncio.get_event_loop()
 
             def on_read():
-                chunk = chan.recv(1024)
+                chunk = chan.recv(CHUNK_SIZE)
                 future.set_result(chunk)
             
             loop.add_reader(chan.fileno(), on_read)
@@ -444,6 +451,77 @@ class Connection:
 
 
 class API:
-    def serve(self):
-        pass
+    PORT = 3600
+    __doc__ = 'Usage:: http://127.0.0.1:3600/<machines>/<command>'
 
+    @classmethod
+    def serve(cls):
+        from http.server import SimpleHTTPRequestHandler, HTTPServer
+        from socketserver import ThreadingMixIn
+        class Server(ThreadingMixIn, HTTPServer): pass
+        class Handler(SimpleHTTPRequestHandler): pass
+        def do_GET(self):
+            try:
+                paths = self.path.split('/')
+                machines = paths[1]
+                cmd = paths[2] if len(paths) == 3 else None
+                if cmd is None:
+                    raise Exception
+                hosts = machines.split(',')
+                cluster = Cluster(hosts)
+                cluster.set_connection()
+                from urllib.request import unquote
+                response = cluster.run(unquote(cmd))
+                html = '\n'.join(map(lambda r: '<h1>{host}</h1><pre>{result}</pre>'.format(
+                    host=str(r.target), result=r.result.decode()), response))
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.end_headers()
+                self.copyfile(BytesIO(bytes(html, 'utf-8')), self.wfile)
+            except:
+                self.send_response(400)
+                self.end_headers()
+                self.copyfile(BytesIO(bytes(self.__doc__)), self.wfile)
+        Handler.do_GET = do_GET
+        server = Server(('0.0.0.0', cls.PORT), Handler)
+        print('FlowLight API serve on {port}... \n {usage}'.format(port=cls.PORT, usage=cls.__doc__))
+        server.serve_forever()
+
+
+if __name__ == '__main__':
+    API.serve()
+    cluster = Cluster(['127.0.0.1'])
+    cluster.set_connection(password='password')
+
+    @task
+    def create_file(task, cluster):
+        responses = cluster.run('''
+        echo {value} > /tmp/test;
+            '''.format(value=task.value)
+        )
+        task.value += 1
+
+    @create_file.on_start
+    def before_create_file(task):
+        task.value = 1
+
+    @create_file.on_complete
+    def after_create_file(task):
+        print(task.value)
+
+    @create_file.on_error
+    def error_when_create_file(exception):
+        print(exception)
+        import traceback
+        traceback.print_exc()
+
+    @task(run_after=create_file)
+    def show_file(meta, cluster):
+        responses = cluster.run('''
+            cat /tmp/test;            
+        ''')
+        for res in responses:
+            print(res)
+
+    cluster.run_task(create_file)
+    cluster.run_task(show_file)
