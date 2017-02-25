@@ -2,6 +2,44 @@
 
 a tool make remote operations easier
 
+## Install
+
+```
+python setup.py install
+```
+
+```
+bash$ flowlight
+FlowLight API serve on 3600...
+ Usage:: http://127.0.0.1:3600/<machines>/<command>
+```
+
+Run command via URL.
+
+```
+http -f GET "http://127.0.0.1:3600/127.0.0.1/whoami"
+```
+
+output:
+
+```html
+<h1>127.0.0.1</h1><pre>tonnie
+</pre>
+```
+
+```
+http -f GET "http://127.0.0.1:3600/host1,host2/ps aux|wc -l"
+```
+
+output:
+
+```html
+<h1>host1</h1><pre>     122
+</pre>
+<h1>host2</h1><pre>     118
+</pre>
+```
+
 ## Usage
 
 Run task via ssh on remote machines.
@@ -110,34 +148,4 @@ ev_loop.run_until_complete(asyncio.gather(
     async_task(m), async_task(m2)
 ))
 ev_loop.close()
-```
-
-Simple HTTP API command runner.
-
-```python
-API.serve()
-```
-
-```
-http -f GET "http://127.0.0.1:3600/127.0.0.1/whoami"
-```
-
-output:
-
-```html
-<h1>127.0.0.1</h1><pre>tonnie
-</pre>
-```
-
-```
-http -f GET "http://127.0.0.1:3600/host1,host2/ps aux|wc -l"
-```
-
-output:
-
-```html
-<h1>host1</h1><pre>     122
-</pre>
-<h1>host2</h1><pre>     118
-</pre>
 ```

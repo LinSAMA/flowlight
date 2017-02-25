@@ -429,7 +429,7 @@ class Connection:
                 chunks.append(chunk)
                 chunk = yield from _read(chan)
             return b''.join(chunks)
-            
+        
         chan = self.client.get_transport().open_session()
         chan.exec_command(command.cmd)
         
@@ -451,6 +451,8 @@ class Connection:
 
 
 class API:
+    """ Simple HTTP API Server to run command on machines by url.
+    """
     PORT = 3600
     __doc__ = 'Usage:: http://127.0.0.1:3600/<machines>/<command>'
 
@@ -489,41 +491,3 @@ class API:
 
 api_serve = API.serve
 
-
-if __name__ == '__main__':
-    API.serve()
-    cluster = Cluster(['127.0.0.1'])
-    cluster.set_connection(password='password')
-
-    @task
-    def create_file(task, cluster):
-        responses = cluster.run('''
-        echo {value} > /tmp/test;
-            '''.format(value=task.value)
-        )
-        task.value += 1
-
-    @create_file.on_start
-    def before_create_file(task):
-        task.value = 1
-
-    @create_file.on_complete
-    def after_create_file(task):
-        print(task.value)
-
-    @create_file.on_error
-    def error_when_create_file(exception):
-        print(exception)
-        import traceback
-        traceback.print_exc()
-
-    @task(run_after=create_file)
-    def show_file(meta, cluster):
-        responses = cluster.run('''
-            cat /tmp/test;            
-        ''')
-        for res in responses:
-            print(res)
-
-    cluster.run_task(create_file)
-    cluster.run_task(show_file)
