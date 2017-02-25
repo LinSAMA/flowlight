@@ -111,16 +111,6 @@ before.join()
 after.join()
 ```
 
-Use `run_only` for task running pre-check.
-
-```python
-@task(run_only=lambda: 1 > 2)
-def fail_task(self):
-    print('condition is passed')
-
-err, status = cluster.run_task(fail_task)
-```
-
 output:
 
 ```
@@ -131,6 +121,16 @@ sleep a while...
 1
 
 1
+```
+
+Use `run_only` for task running pre-check.
+
+```python
+@task(run_only=lambda: 1 > 2)
+def fail_task(self):
+    print('condition is passed')
+
+err, status = cluster.run_task(fail_task)
 ```
 
 Async tasks supported.
@@ -149,3 +149,7 @@ ev_loop.run_until_complete(asyncio.gather(
 ))
 ev_loop.close()
 ```
+
+## TODO
+
+- file upload & download
