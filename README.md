@@ -10,7 +10,7 @@ python setup.py install
 ```
 
 ```
-bash$ flowlight
+$flowlight
 FlowLight API serve on 3600...
  Usage:: http://127.0.0.1:3600/<machines>/<command>
 ```
@@ -139,8 +139,7 @@ Async tasks supported.
 async def async_task(machine):
     await machine.run_async("ls")
 
-m = Machine('host1')
-m.set_connection()
+m = Machine('host1', connect=True)
 m2 = Machine('host2')
 m2.set_connection()
 

@@ -5,9 +5,8 @@ import paramiko
 import socket
 import subprocess
 import threading
-from contextlib import contextmanager
 from time import time
-from io import BytesIO, StringIO
+from io import BytesIO
 
 __all__ = [
     'task',
@@ -53,10 +52,12 @@ class Machine(Node):
         >>> isinstance(m.run('echo 1;'), Response)
         True
     """
-    def __init__(self, host, name=None):
+    def __init__(self, host, name=None, connect=False, **kwargs):
         Node.__init__(self, name)
         self.host = host
         self._connection = None
+        if connect is True:
+            self.set_connection(connect=connect, **kwargs)
 
     def _need_connection(func):
         def wrapper(self, *args, **kwargs):
@@ -354,9 +355,7 @@ class Connection:
         self.timeout = timeout
         pkey = os.path.abspath(os.path.expanduser(pkey))
         if os.path.exists(pkey):
-            self.pkey = paramiko.RSAKey.from_private_key_file(
-                pkey
-            )
+            self.pkey = paramiko.RSAKey.from_private_key_file(pkey)
         self._connect_args = kwargs
         self.is_connected = False
         if auto_add_host_policy:
@@ -439,6 +438,9 @@ class Connection:
 
         response = Response(self._machine, BytesIO(b''), BytesIO(data), BytesIO(b''))
         return response
+
+    def sftp(self):# TODO
+        pass
 
     @ensure_connect
     def __enter__(self):
