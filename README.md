@@ -1,4 +1,5 @@
 # flowlight
+[![Build Status](https://travis-ci.org/tonnie17/flowlight.svg?branch=master)](https://travis-ci.org/tonnie17/flowlight)
 
 a tool make remote operations easier
 
