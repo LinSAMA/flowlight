@@ -352,9 +352,11 @@ class Connection:
         self.username = username
         self.password = password
         self.timeout = timeout
-        self.pkey = paramiko.RSAKey.from_private_key_file(
-            os.path.abspath(os.path.expanduser(pkey))
-        )
+        pkey = os.path.abspath(os.path.expanduser(pkey))
+        if os.path.exists(pkey):
+            self.pkey = paramiko.RSAKey.from_private_key_file(
+                pkey
+            )
         self._connect_args = kwargs
         self.is_connected = False
         if auto_add_host_policy:
