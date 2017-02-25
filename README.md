@@ -82,7 +82,7 @@ output:
 2
 ```
 
-Scheduling tasks with order.
+User `run_after` to set order of tasks.
 
 ```python
 @task(run_after=create_file)
@@ -94,16 +94,6 @@ def show_file(meta, cluster):
         print(res)
 
 cluster.run_task(show_file)
-```
-
-Use `run_only` for task running pre-check.
-
-```python
-@task(run_only=lambda: 1 > 2)
-def fail_task(self):
-    print('condition is passed')
-
-err, status = cluster.run_task(fail_task)
 ```
 
 Use trigger in multi-threading.
@@ -119,6 +109,16 @@ sleep(2)
 before.start()
 before.join()
 after.join()
+```
+
+Use `run_only` for task running pre-check.
+
+```python
+@task(run_only=lambda: 1 > 2)
+def fail_task(self):
+    print('condition is passed')
+
+err, status = cluster.run_task(fail_task)
 ```
 
 output:
